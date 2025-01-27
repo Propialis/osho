@@ -8,6 +8,13 @@ import { ClientBase } from "./base.ts";
 import { messageCompletionFooter } from "@ai16z/eliza/src/parsing.ts";
 import { characterJsonManager } from "@ai16z/eliza/src/characterJsonManager.ts";
 
+interface Transaction {
+    token: string;
+    boughtToken: string;
+    amount: number;
+    marketCap: number;
+}
+
 const twitterSearchTemplate =
     `{{timeline}}
 
@@ -97,35 +104,48 @@ export class TwitterInteractPeopleClient extends ClientBase {
                     continue; // Skip to the next user if no tweets are found
                 }
 
-                let respondMinDelaySecondsString = this.runtime.getSetting("TWITTER_RESPOND_MIN_DELAY_SECONDS");
-                let respondMaxDelaySecondsString = this.runtime.getSetting("TWITTER_RESPOND_MAX_DELAY_SECONDS");
-
-                let respondMinDelaySeconds = parseInt(respondMinDelaySecondsString) || 1000;
-                let respondMaxDelaySeconds = parseInt(respondMaxDelaySecondsString) || 2000;
+                let transactions: Transaction[] = []
 
                 for (const tweet of recentTweets) {
-
-                    let hasAlreadyResponded = await this.hasRespondedToTweet(tweet.id);
-
-                    if(hasAlreadyResponded){
-                        console.log(`Already responded to tweet: ${tweet.id}`);
-                        continue;
-                    }
-
-                    await this.respondToTweet(tweet, formattedHomeTimeline);
-                    await this.cacheTweet(tweet);
-                    this.respondedTweets.add(tweet.id); // Mark as processed
-
-                    const randomInterval = this.getRandomInterval(respondMinDelaySeconds, respondMaxDelaySeconds);
-                    console.log(`Waiting for ${randomInterval / 1000} seconds before processing the next tweet.`);
-                    await this.delay(randomInterval); // Delay before processing the next tweet
+                    const transactionData = this.parseTransaction(tweet.text);
+                    transactions.push(transactionData);
                 }
+
+                const sortedTransactions = transactions.sort((a, b) => b.amount - a.amount);
+                console.log("sortedTransactions: ", sortedTransactions);
+
                 // Save recent tweets to cache
                 fs.writeFileSync("tweetcache/home_timeline.json", JSON.stringify(recentTweets, null, 2));
             } catch (error) {
                 console.error(`Error fetching tweets for ${username}:`, error);
             }
         }
+    }
+
+    private parseTransaction(text: string): Transaction {
+        // 1. Remove all emojis and specific text parts
+        let cleaned = text
+            .replace(/[\u{1F300}-\u{1F6FF}\u{2600}-\u{26FF}]/gu, '')
+            .replace('A ', '')
+            .replace(' AI whale just bought ', ' ')
+            .replace(' whale just bought ', ' ')
+            .replace(' of ', ' ')
+            .replace(' at ', ' ')
+            .replace(' MC', '');
+
+        // 2. Normalize spaces
+        cleaned = cleaned.replace(/\s+/g, ' ').trim();
+
+        // 3. Split and parse
+        const [token, amount, boughtToken, marketCap] = cleaned.split(' ');
+
+        return {
+            token: token.replace('$', '').toUpperCase(),
+            boughtToken: boughtToken.replace('$', '').toUpperCase(),
+            amount: parseFloat(amount.replace('$', '')) * 1000, // Convert K to actual number
+            marketCap: parseFloat(marketCap.replace('$', '')) *
+                (marketCap.endsWith('K') ? 1000 : 1000000) // Handle K/M
+        };
     }
 
     private async hasRespondedToTweet(tweetId: string): Promise<boolean> {
