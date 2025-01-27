@@ -30,6 +30,7 @@ Your response should not contain any questions. Brief, concise statements only. 
 
 export class TwitterPostClient extends ClientBase {
     onReady() {
+        return
         const generateNewTweetLoop = () => {
             this.generateNewTweet();
             setTimeout(
@@ -218,7 +219,7 @@ export class TwitterPostClient extends ClientBase {
             const aiDecidesEveryXPosts = parseInt(aiDecidesEveryXPostsString) || 2;
             const canAIDecide = this.currentPostIndex % aiDecidesEveryXPosts === 0;
 
-            let shouldGenerateImage = false;
+            let shouldGenerateImage = true;
 
             console.log("currentPostIndex: ", this.currentPostIndex);
             console.log("aiDecidesEveryXPostsString: ", aiDecidesEveryXPostsString);
