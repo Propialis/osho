@@ -42,9 +42,7 @@ About {{agentName}} (@{{twitterUserName}}):
 
 {{relatedTweets}}
 
-# Task: Generate a post in the voice and style of {{agentName}}, aka @{{twitterUserName}} reasoning why the given token was purchased the most recently.
-Write a short post that is {{adjective}} about {{topic}}), from the perspective of {{agentName}}. Try to write something totally different than previous posts. Do not add commentary or acknowledge this request, just write the post.
-Your response should not contain any questions. Brief, concise statements only. No emojis. Use \\n\\n (double spaces) between statements.`;
+# Task: This is the information about a token's buy order, and the top tweets about the token in the last hour. Come up with a tweet justifying the big buy order. Write a small paragraph, no bullet points, and talk like a crypto degen. Don't ask people to buy or sell, just give your unbiased opinion and information.`;
 
 const twitterSearchTemplate =
     `{{timeline}}
