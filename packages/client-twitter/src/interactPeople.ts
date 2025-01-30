@@ -184,6 +184,33 @@ export class TwitterInteractPeopleClient extends ClientBase {
         }
     }
 
+    private trimToCompleteLastSentence(text : string, maxLength = 280) {
+
+        let content = text.replaceAll(/\\n/g, "\n").trim();
+
+        if (content.length <= maxLength) {
+            return content;
+        }
+
+        const sentences = content.match(/[^.!?]+[.!?]+/g) || [content];
+
+        let result = '';
+
+        for (const sentence of sentences) {
+            if ((result + sentence).length <= maxLength) {
+                result += sentence;
+            } else {
+                break;
+            }
+        }
+
+        if (!result) {
+            return content.slice(0, maxLength);
+        }
+
+        return result.trim();
+    }
+
     private async generateNewTweet(mostBoughtTokenData : Transaction, relatedTweets : Tweet[]) {
         console.log("Generating new tweet");
         try {
@@ -254,8 +281,7 @@ export class TwitterInteractPeopleClient extends ClientBase {
             });
 
             let slice = newTweetContent.replaceAll(/\\n/g, "\n").trim();
-
-            slice = slice.slice(0, 280);
+            slice = this.trimToCompleteLastSentence( slice)
 
             let content = slice;
 
