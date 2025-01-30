@@ -245,10 +245,6 @@ export class TwitterInteractPeopleClient extends ClientBase {
                     })
                     .join("\n");
 
-            const rudeCharacter = await characterJsonManager.getRudeCharacter(this.runtime.character);
-            const originalCharacter = this.runtime.character;
-            this.runtime.character = rudeCharacter;
-
             const state = await this.runtime.composeState(
                 {
                     userId: this.runtime.agentId,
@@ -263,8 +259,6 @@ export class TwitterInteractPeopleClient extends ClientBase {
                     relatedTweets: `Related Discussions:\n${relatedTweets.map(tweet => `@${tweet.username}: ${tweet.text}`).join('\n')}`
                 }
             );
-
-            this.runtime.character = originalCharacter;
 
             // Generate new tweet
             const context = composeContext({
@@ -281,7 +275,11 @@ export class TwitterInteractPeopleClient extends ClientBase {
             });
 
             let slice = newTweetContent.replaceAll(/\\n/g, "\n").trim();
-            slice = this.trimToCompleteLastSentence( slice)
+            slice = slice.replaceAll(/\*{1,2}[^*]+\*{1,2}/g, '').trim();
+            slice = slice.replace(/[\u{1F300}-\u{1F9FF}]|[\u{2700}-\u{27BF}]|[\u{1F600}-\u{1F64F}]|[\u{1F680}-\u{1F6FF}]|[\u{2600}-\u{26FF}]/gu, '');
+            slice = slice.replace(/^[\n\s]+/, '').trim();
+            slice = slice.replace(/\s+/g, ' ').trim();
+            slice = this.trimToCompleteLastSentence(slice);
 
             let content = slice;
 
