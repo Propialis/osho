@@ -141,78 +141,57 @@ export class TwitterInteractPeopleClient extends ClientBase {
         }
     }
 
-    private async getTopPosts() {
-        const url = 'https://pro-api.coinmarketcap.com/v1/content/posts/top';
-
+    private async takeScreenshot(url: string, outputPath: string) {
         try {
+            // Determine the OS-specific Chrome profile path
+            const userDataDir = process.platform === 'win32'
+                ? `${process.env.LOCALAPPDATA}\\Google\\Chrome\\User Data`
+                : process.platform === 'darwin'
+                    ? `${process.env.HOME}/Library/Application Support/Google/Chrome`
+                    : `${process.env.HOME}/.config/google-chrome`;
 
-            const response = await axios.get(url, {
-                headers: {
-                    // Standard headers shown in your Postman screenshot
-                    'Cache-Control': 'no-cache',
-                    'Accept': '*/*',
-                    'Accept-Encoding': 'gzip, deflate, br',
-                    'Connection': 'keep-alive',
-                    'User-Agent': 'PostmanRuntime/7.43.0',  // You might want to customize this
-                    'Host': new URL(url).host,  // This will be automatically set based on the URL
+            console.log('Using Chrome profile path:', userDataDir);
 
-                    // Your API specific header
-                    'X-CMC_PRO_API_KEY': API_KEY,
-                },
-                params: {
-                    symbol: 'UFD'
+            const browser = await puppeteer.launch({
+                headless: "new",
+                args: [
+                    `--user-data-dir=${userDataDir}`,
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox'
+                ],
+                ignoreDefaultArgs: ['--disable-extensions'],
+                defaultViewport: {
+                    width: 1920,
+                    height: 1080
                 }
             });
 
-            return response.data;
-        } catch (error) {
-            if (axios.isAxiosError(error)) {
-                // Log the full error response
-                console.error('Full API Error Response:', {
-                    status: error.response?.status,
-                    statusText: error.response?.statusText,
-                    data: error.response?.data,
-                    headers: error.response?.headers
-                });
-            }
-            throw error;
-        }
-    }
-
-    private async takeScreenshot(url: string, outputPath: string): Promise<void> {
-        try {
-            // Launch the browser
-            const browser = await puppeteer.launch({
-                headless: "new" // Use new headless mode
-            });
-
-            // Create a new page
             const page = await browser.newPage();
 
-            // Set viewport size
-            await page.setViewport({
-                width: 1920,
-                height: 1080
-            });
-
-            // Navigate to URL
+            console.log('Navigating to URL:', url);
             await page.goto(url, {
-                waitUntil: 'networkidle0', // Wait until network is idle
-                timeout: 30000 // 30 seconds timeout
+                waitUntil: 'networkidle0',
+                timeout: 30000
             });
 
-            // Take screenshot
+            console.log('Taking screenshot...');
             await page.screenshot({
                 path: outputPath,
-                fullPage: true // Capture full scrollable page
+                fullPage: true
             });
 
-            // Close browser
             await browser.close();
+            console.log('Screenshot saved to:', outputPath);
 
-            console.log(`Screenshot saved to ${outputPath}`);
         } catch (error) {
-            console.error('Error taking screenshot:', error);
+            console.error('Detailed error:', error);
+
+            // Check if Chrome is running
+            const isChromeLocked = error.message.includes('user data directory is already in use');
+            if (isChromeLocked) {
+                console.error('Chrome appears to be running. Please close all Chrome instances and try again.');
+            }
+
             throw error;
         }
     }
@@ -235,7 +214,7 @@ export class TwitterInteractPeopleClient extends ClientBase {
 
     private async checkForNewTweets() {
 
-        await this.processScreenshot("https://portal.kaito.ai/insight", "Extract all the text from this image")
+        await this.processScreenshot("https://assetstore.unity.com/account/assets", "Extract all the text from this image")
 
         return
 
@@ -283,25 +262,7 @@ export class TwitterInteractPeopleClient extends ClientBase {
                     .sort(([,a], [,b]) => b.amount - a.amount)[0]?.[1];
 
                 if (mostBoughtToken) {
-                    const tokenTweets = await this.searchTweetsForToken(mostBoughtToken.boughtToken);
-                    let topPostFromCMC = await this.getTopPosts()
 
-                    // Get text from CMC posts
-                    const textContents = topPostFromCMC.data.list
-                        .map((post: Post) => post.text_content)
-                        .filter(text => text !== "");
-
-                    // Get text from token tweets and merge with CMC texts
-                    const allTexts = [
-                        ...textContents,
-                        ...tokenTweets.map(tweet => tweet.text).filter(text => text !== "")
-                    ];
-
-                    console.log(`Most bought token:`, mostBoughtToken);
-                    console.log(`Related tweets:`, tokenTweets);
-                    console.log(`All tweet texts:`, allTexts);
-
-                    await this.generateNewTweet(mostBoughtToken, tokenTweets)
                 }
 
                 // Save recent tweets to cache
@@ -920,9 +881,3 @@ export class TwitterInteractPeopleClient extends ClientBase {
         }
     }
 }
-
-
-
-
-const COIN_MARKET_CAP_API_BASE_URL = 'https://pro-api.coinmarketcap.com/v1/content/posts/top';
-const API_KEY = 'ebe2c2c4-2166-493f-8fb3-6b60a8405d8c'; // Set this in your .env file
