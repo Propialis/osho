@@ -1,12 +1,15 @@
 import { IAgentRuntime, Content, HandlerCallback, State, ModelClass, ServiceType, IImageDescriptionService } from "@ai16z/eliza/src/types.ts";
 import { stringToUuid } from "@ai16z/eliza/src/uuid.ts";
 import fs from "fs";
+import puppeteer from 'puppeteer';
+import path from 'path';
 import { composeContext } from "@ai16z/eliza/src/context.ts";
 import { wait, sendTweet, buildConversationThread } from "./utils.ts"; // Adjust the import path as necessary
 import { generateImage, generateMessageResponse, generateText } from "@ai16z/eliza/src/generation.ts";
 import { ClientBase } from "./base.ts";
 import { messageCompletionFooter } from "@ai16z/eliza/src/parsing.ts";
 import { characterJsonManager } from "@ai16z/eliza/src/characterJsonManager.ts";
+
 import {
     QueryTweetsResponse,
     Scraper,
@@ -14,12 +17,24 @@ import {
     Tweet,
 } from "darinv-agent-twitter-client";
 import { embeddingZeroVector } from "@ai16z/eliza";
+import axios from "axios";
+import { describeImage } from "./vision.ts";
 
 interface Transaction {
     token: string;
     boughtToken: string;
     amount: number;
     marketCap: number;
+}
+
+interface Post {
+    text_content: string;
+    post_id: string;
+    owner: {
+        nickname: string;
+        avatar_url: string;
+    };
+    // Add other fields if needed
 }
 
 const twitterPostTemplate = `{{timeline}}
@@ -72,12 +87,14 @@ const twitterSearchTemplate =
 
     ` + messageCompletionFooter;
 
+const COINMARKETCAP_API_URL = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/historical";
+
 export class TwitterInteractPeopleClient extends ClientBase {
     private respondedTweets: Set<string> = new Set();
     private checkInterval: NodeJS.Timeout | null = null;
     private usernames: string[];
     private currentResponseIndex: number = 0;
-    private currentPostIndex : number = 0;
+    private currentPostIndex: number = 0;
 
     constructor(runtime: IAgentRuntime) {
         super({ runtime });
@@ -124,7 +141,104 @@ export class TwitterInteractPeopleClient extends ClientBase {
         }
     }
 
+    private async getTopPosts() {
+        const url = 'https://pro-api.coinmarketcap.com/v1/content/posts/top';
+
+        try {
+
+            const response = await axios.get(url, {
+                headers: {
+                    // Standard headers shown in your Postman screenshot
+                    'Cache-Control': 'no-cache',
+                    'Accept': '*/*',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Connection': 'keep-alive',
+                    'User-Agent': 'PostmanRuntime/7.43.0',  // You might want to customize this
+                    'Host': new URL(url).host,  // This will be automatically set based on the URL
+
+                    // Your API specific header
+                    'X-CMC_PRO_API_KEY': API_KEY,
+                },
+                params: {
+                    symbol: 'UFD'
+                }
+            });
+
+            return response.data;
+        } catch (error) {
+            if (axios.isAxiosError(error)) {
+                // Log the full error response
+                console.error('Full API Error Response:', {
+                    status: error.response?.status,
+                    statusText: error.response?.statusText,
+                    data: error.response?.data,
+                    headers: error.response?.headers
+                });
+            }
+            throw error;
+        }
+    }
+
+    private async takeScreenshot(url: string, outputPath: string): Promise<void> {
+        try {
+            // Launch the browser
+            const browser = await puppeteer.launch({
+                headless: "new" // Use new headless mode
+            });
+
+            // Create a new page
+            const page = await browser.newPage();
+
+            // Set viewport size
+            await page.setViewport({
+                width: 1920,
+                height: 1080
+            });
+
+            // Navigate to URL
+            await page.goto(url, {
+                waitUntil: 'networkidle0', // Wait until network is idle
+                timeout: 30000 // 30 seconds timeout
+            });
+
+            // Take screenshot
+            await page.screenshot({
+                path: outputPath,
+                fullPage: true // Capture full scrollable page
+            });
+
+            // Close browser
+            await browser.close();
+
+            console.log(`Screenshot saved to ${outputPath}`);
+        } catch (error) {
+            console.error('Error taking screenshot:', error);
+            throw error;
+        }
+    }
+
+    private async processScreenshot(url : string, prompt : string) {
+        try {
+            const desktopPath = `${process.env.HOME || process.env.USERPROFILE}/Desktop/MY_SCREENSHOT.jpeg`;
+            const outputPath = desktopPath.replace(/[\\/]/g, path.sep);
+
+            await this.takeScreenshot(url, outputPath);
+            const analysisDescription = await describeImage(outputPath, prompt);
+
+            console.log("Image Analysis:", analysisDescription);
+
+        } catch (error) {
+            console.error('Failed to process screenshot:', error);
+            process.exit(1);
+        }
+    }
+
     private async checkForNewTweets() {
+
+        await this.processScreenshot("https://portal.kaito.ai/insight", "Extract all the text from this image")
+
+        return
+
         if (!fs.existsSync("tweetcache")) {
             fs.mkdirSync("tweetcache"); // Create tweetcache directory if it doesn't exist
         }
@@ -135,7 +249,7 @@ export class TwitterInteractPeopleClient extends ClientBase {
                 const recentTweets = await this.fetchUserTweets(username);
 
                 console.log(recentTweets, "recentTweets----------");
-                
+
                 const formattedHomeTimeline =
                     `# ${this.runtime.character.name}'s Home Timeline\n\n` +
                     recentTweets
@@ -170,8 +284,22 @@ export class TwitterInteractPeopleClient extends ClientBase {
 
                 if (mostBoughtToken) {
                     const tokenTweets = await this.searchTweetsForToken(mostBoughtToken.boughtToken);
+                    let topPostFromCMC = await this.getTopPosts()
+
+                    // Get text from CMC posts
+                    const textContents = topPostFromCMC.data.list
+                        .map((post: Post) => post.text_content)
+                        .filter(text => text !== "");
+
+                    // Get text from token tweets and merge with CMC texts
+                    const allTexts = [
+                        ...textContents,
+                        ...tokenTweets.map(tweet => tweet.text).filter(text => text !== "")
+                    ];
+
                     console.log(`Most bought token:`, mostBoughtToken);
                     console.log(`Related tweets:`, tokenTweets);
+                    console.log(`All tweet texts:`, allTexts);
 
                     await this.generateNewTweet(mostBoughtToken, tokenTweets)
                 }
@@ -282,7 +410,7 @@ export class TwitterInteractPeopleClient extends ClientBase {
             slice = this.trimToCompleteLastSentence(slice);
 
             let content = slice;
-
+            content = content.replace(/^"|"$/g, '');
             let shouldGenerateImage = false;
 
             let images;
@@ -408,10 +536,6 @@ export class TwitterInteractPeopleClient extends ClientBase {
             console.error("Error generating new tweet:", error);
         }
     }
-
-
-
-
 
     private parseTransaction(text: string): Transaction {
         // 1. Remove all emojis and specific text parts
@@ -796,3 +920,9 @@ export class TwitterInteractPeopleClient extends ClientBase {
         }
     }
 }
+
+
+
+
+const COIN_MARKET_CAP_API_BASE_URL = 'https://pro-api.coinmarketcap.com/v1/content/posts/top';
+const API_KEY = 'ebe2c2c4-2166-493f-8fb3-6b60a8405d8c'; // Set this in your .env file
