@@ -1,15 +1,14 @@
 import { IAgentRuntime, Content, HandlerCallback, State, ModelClass, ServiceType, IImageDescriptionService } from "@ai16z/eliza/src/types.ts";
 import { stringToUuid } from "@ai16z/eliza/src/uuid.ts";
 import fs from "fs";
-import puppeteer from 'puppeteer';
-import path from 'path';
 import { composeContext } from "@ai16z/eliza/src/context.ts";
 import { wait, sendTweet, buildConversationThread } from "./utils.ts"; // Adjust the import path as necessary
 import { generateImage, generateMessageResponse, generateText } from "@ai16z/eliza/src/generation.ts";
 import { ClientBase } from "./base.ts";
 import { messageCompletionFooter } from "@ai16z/eliza/src/parsing.ts";
 import { characterJsonManager } from "@ai16z/eliza/src/characterJsonManager.ts";
-
+import puppeteer from 'puppeteer';
+import path from 'path';
 import {
     QueryTweetsResponse,
     Scraper,
@@ -127,94 +126,80 @@ export class TwitterInteractPeopleClient extends ClientBase {
         });
     }
 
-    private async searchTweetsForToken(token: string) {
-        try {
-            const recentTweets = await this.fetchSearchTweets(
-                `$${token}`,
-                20,
-                SearchMode.Top
-            );
-            return recentTweets.tweets;
-        } catch (error) {
-            console.error(`Error searching tweets for ${token}:`, error);
-            return [];
-        }
+    private async wsEndPoint() {
+        return await fetch('http://127.0.0.1:9222/json/version')
+            .then((res) => res.json())
+            .then((res) => res.webSocketDebuggerUrl)
     }
 
-    private async takeScreenshot(url: string, outputPath: string) {
+    private async takeScreenshot(
+        url: string,
+        outputPath: string,
+        options: {
+            fullPage?: boolean;
+            width?: number;
+            height?: number;
+            deviceScaleFactor?: number;
+            waitForSelector?: string;
+            timeout?: number;
+        } = {}
+    ) {
+        const browser = await puppeteer.connect({ browserWSEndpoint: await this.wsEndPoint() });
+
         try {
-            // Determine the OS-specific Chrome profile path
-            const userDataDir = process.platform === 'win32'
-                ? `${process.env.LOCALAPPDATA}\\Google\\Chrome\\User Data`
-                : process.platform === 'darwin'
-                    ? `${process.env.HOME}/Library/Application Support/Google/Chrome`
-                    : `${process.env.HOME}/.config/google-chrome`;
-
-            console.log('Using Chrome profile path:', userDataDir);
-
-            const browser = await puppeteer.launch({
-                headless: "new",
-                args: [
-                    `--user-data-dir=${userDataDir}`,
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox'
-                ],
-                ignoreDefaultArgs: ['--disable-extensions'],
-                defaultViewport: {
-                    width: 1920,
-                    height: 1080
-                }
-            });
-
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const pathInfo = path.parse(outputPath);
+            const newFileName = `${pathInfo.name}_${timestamp}${pathInfo.ext}`;
+            const fullOutputPath = path.join(pathInfo.dir, newFileName);
             const page = await browser.newPage();
 
-            console.log('Navigating to URL:', url);
+            await page.setViewport({
+                width: options.width || 1920,
+                height: options.height || 1080,
+                deviceScaleFactor: options.deviceScaleFactor || 1
+            });
+
             await page.goto(url, {
                 waitUntil: 'networkidle0',
-                timeout: 30000
+                timeout: options.timeout || 30000
             });
 
-            console.log('Taking screenshot...');
-            await page.screenshot({
-                path: outputPath,
-                fullPage: true
-            });
-
-            await browser.close();
-            console.log('Screenshot saved to:', outputPath);
-
-        } catch (error) {
-            console.error('Detailed error:', error);
-
-            // Check if Chrome is running
-            const isChromeLocked = error.message.includes('user data directory is already in use');
-            if (isChromeLocked) {
-                console.error('Chrome appears to be running. Please close all Chrome instances and try again.');
+            if (options.waitForSelector) {
+                await page.waitForSelector(options.waitForSelector, {
+                    timeout: options.timeout || 30000
+                });
             }
 
-            throw error;
-        }
-    }
+            // Create directory if it doesn't exist
+            await fs.promises.mkdir(pathInfo.dir, { recursive: true });
 
-    private async processScreenshot(url : string, prompt : string) {
-        try {
-            const desktopPath = `${process.env.HOME || process.env.USERPROFILE}/Desktop/MY_SCREENSHOT.jpeg`;
-            const outputPath = desktopPath.replace(/[\\/]/g, path.sep);
+            await page.screenshot({
+                path: fullOutputPath,
+                fullPage: options.fullPage || false,
+                type: 'jpeg'
+            });
 
-            await this.takeScreenshot(url, outputPath);
-            const analysisDescription = await describeImage(outputPath, prompt);
-
-            console.log("Image Analysis:", analysisDescription);
+            console.log(`Screenshot saved to: ${fullOutputPath}`);
+            return fullOutputPath;
 
         } catch (error) {
-            console.error('Failed to process screenshot:', error);
-            process.exit(1);
+            console.error('Error taking screenshot:', error);
+            throw error;
+        } finally {
+            await browser.close();
         }
     }
 
     private async checkForNewTweets() {
 
-        await this.processScreenshot("https://assetstore.unity.com/account/assets", "Extract all the text from this image")
+        let pathToScreenshot = await this.takeScreenshot(
+            'https://portal.kaito.ai/insight',
+            'C:\\Users\\Vsevolod\\Desktop\\basic-screenshot.jpeg'
+        );
+
+        const description = await describeImage(pathToScreenshot, "Scrape all the text from the image");
+
+        console.log("description: ", description);
 
         return
 
@@ -696,7 +681,6 @@ export class TwitterInteractPeopleClient extends ClientBase {
             const originalTweet = await this.requestQueue.add(() =>
                 this.twitterClient.getTweet(selectedTweet.id)
             );
-            tweetBackground = `Retweeting @${originalTweet.username}: ${originalTweet.text}`;
         }
 
         // Generate image descriptions using GPT-4 vision API
