@@ -59,6 +59,13 @@ About {{agentName}} (@{{twitterUserName}}):
 
 # Task: This is the information about a token's buy order, and the top tweets about the token in the last hour. Come up with a tweet justifying the big buy order. Write a small paragraph, no bullet points, and talk like a crypto degen. Don't ask people to buy or sell, just give your unbiased opinion and information.`;
 
+
+const articleEvaluationTemplate =
+    `Evaluate the text below from the scale from 1 to 10 based on how useful the information it contains is. RETURN ONLY THE NUMBER AND NOTHING MORE.
+    
+    {{text}}`;
+
+
 const twitterSearchTemplate =
     `{{timeline}}
 
@@ -258,6 +265,120 @@ export class TwitterInteractPeopleClient extends ClientBase {
         return topToken;
     }
 
+    private async clickKaitoCards(browser: Browser, url: string, fullOutputPath: string, minAcceptableArticles : number, minAcceptableScore): Promise<string[]> {
+        const highScoringTexts: string[] = [];
+
+        try {
+            const page = await browser.newPage();
+            await page.setViewport({
+                width: 1920,
+                height: 1080,
+                deviceScaleFactor: 1
+            });
+
+            await page.goto(url, {
+                waitUntil: 'networkidle0',
+                timeout: 30000
+            });
+
+            await page.waitForSelector('[class*="result-card-container"]', { timeout: 30000 });
+            const cards = await page.$$('[class*="result-card-container"]');
+            console.log(`Found ${cards.length} cards`);
+
+            for (const card of cards) {
+                try {
+                    const isVisible = await card.isIntersectingViewport();
+                    if (!isVisible) {
+                        await card.evaluate(el => {
+                            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        });
+                        await page.waitForTimeout(500);
+                    }
+
+                    await card.click();
+                    console.log('Clicked card');
+                    await page.waitForTimeout(2000);
+
+                    const previewContainer = await page.waitForSelector('#preview-container');
+                    if (previewContainer) {
+                        const scrollHeight = await page.evaluate(() => {
+                            const element = document.getElementById('preview-container');
+                            return element ? element.scrollHeight : 0;
+                        });
+
+                        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                        const pathInfo = path.parse(fullOutputPath);
+                        const newFileName = `${pathInfo.name}_${timestamp}${pathInfo.ext}`;
+                        const screenshotPath = path.join(pathInfo.dir, newFileName);
+
+                        await previewContainer.screenshot({
+                            path: screenshotPath,
+                            type: 'jpeg',
+                            clip: {
+                                x: 0,
+                                y: 0,
+                                width: 1920,
+                                height: scrollHeight
+                            }
+                        });
+
+                        console.log(`Screenshot saved to: ${screenshotPath}`);
+                        const text = await describeImage(screenshotPath, "Scrape all the text in the section of the screenshot that has the 'Back to overview' button and 'Bookmark' button AND also ALL the text that is below.");
+
+                        const state = await this.runtime.composeState(
+                            {
+                                userId: this.runtime.agentId,
+                                roomId: stringToUuid("twitter_generate_room"),
+                                agentId: this.runtime.agentId,
+                                content: { text: "", action: "" },
+                            },
+                            {
+                                text: text,
+                            }
+                        );
+
+                        const context = composeContext({
+                            state,
+                            template: articleEvaluationTemplate,
+                        });
+
+                        const evaluationResult = await generateText({
+                            runtime: this.runtime,
+                            context,
+                            modelClass: ModelClass.SMALL,
+                        });
+
+                        console.log("evaluationResult: ", evaluationResult);
+
+                        // Parse evaluation result and add high-scoring texts
+                        const score = parseFloat(evaluationResult);
+                        if (!isNaN(score) && score >= minAcceptableScore) {
+                            highScoringTexts.push(text);
+                            console.log(`Added text with score ${score} to collection`);
+
+                            console.log(`Has ${highScoringTexts.length}/${minAcceptableArticles} articles`);
+
+                            if(highScoringTexts.length >= minAcceptableArticles){
+                                return highScoringTexts;
+                            }
+                        }
+                    }
+
+                    await page.waitForTimeout(2000);
+                } catch (error) {
+                    console.error('Error processing card:', error);
+                    continue;
+                }
+            }
+
+            await page.close();
+            return highScoringTexts;
+        } catch (error) {
+            console.error('Error in clickKaitoCards:', error);
+            throw error;
+        }
+    }
+
     private async checkForNewTweets() {
 
         const browser = await puppeteer.connect({ browserWSEndpoint: await this.wsEndPoint() });
@@ -268,75 +389,17 @@ export class TwitterInteractPeopleClient extends ClientBase {
             'C:\\Users\\Vsevolod\\Desktop\\basic-screenshot.jpeg'
         );
 
-        const description = await describeImage(pathToScreenshot, "Scrape all the text from the image");
+        const topToken = await describeImage(pathToScreenshot, "Return the name only (For example, SOL, BTC, ETH, etc.) of the token that is on the top of the Top Gainer list");
 
-        const topToken = await this.getTopToken(description);
-
-        console.log("description: ", description);
+        console.log("topToken: ", topToken);
 
         const kaitoUrl = await this.generateKaitoUrl(topToken)
 
-        pathToScreenshot = await this.takeScreenshot(
-            browser,
-            kaitoUrl,
-            'C:\\Users\\Vsevolod\\Desktop\\kaito-screenshot.jpeg'
-        );
+        await (await browser.newPage()).goto(kaitoUrl)
 
-        return
+        const usefulArticles = await this.clickKaitoCards(browser, kaitoUrl, 'C:\\Users\\Vsevolod\\Desktop\\kaito-article.jpeg', 5, 5);
 
-        if (!fs.existsSync("tweetcache")) {
-            fs.mkdirSync("tweetcache"); // Create tweetcache directory if it doesn't exist
-        }
-
-        for (const username of this.usernames) {
-            try {
-                await new Promise((resolve) => setTimeout(resolve, 10000)); // Rate limiting
-                const recentTweets = await this.fetchUserTweets(username);
-
-                console.log(recentTweets, "recentTweets----------");
-
-                const formattedHomeTimeline =
-                    `# ${this.runtime.character.name}'s Home Timeline\n\n` +
-                    recentTweets
-                        .map((tweet) => {
-                            return `ID: ${tweet.id}\nFrom: ${tweet.name} (@${tweet.username})${tweet.inReplyToStatusId ? ` In reply to: ${tweet.inReplyToStatusId}` : ""}\nText: ${tweet.text}\n---\n`;
-                        })
-                        .join("\n");
-                if (recentTweets.length === 0) {
-                    console.log(`No tweets found for user: ${username}`);
-                    continue; // Skip to the next user if no tweets are found
-                }
-
-                let transactions: Transaction[] = []
-
-                for (const tweet of recentTweets) {
-                    const transactionData = this.parseTransaction(tweet.text);
-                    transactions.push(transactionData);
-                }
-
-                const sortedTransactions = transactions.sort((a, b) => b.amount - a.amount);
-                console.log("sortedTransactions: ", sortedTransactions);
-
-                const tokenVolumes = transactions.reduce((acc, trans) => {
-                    if (!acc[trans.boughtToken] || acc[trans.boughtToken].amount < trans.amount) {
-                        acc[trans.boughtToken] = trans;
-                    }
-                    return acc;
-                }, {} as Record<string, Transaction>);
-
-                const mostBoughtToken = Object.entries(tokenVolumes)
-                    .sort(([,a], [,b]) => b.amount - a.amount)[0]?.[1];
-
-                if (mostBoughtToken) {
-
-                }
-
-                // Save recent tweets to cache
-                fs.writeFileSync("tweetcache/home_timeline.json", JSON.stringify(recentTweets, null, 2));
-            } catch (error) {
-                console.error(`Error fetching tweets for ${username}:`, error);
-            }
-        }
+        await this.generateNewTweet(topToken, usefulArticles)
     }
 
     private trimToCompleteLastSentence(text : string, maxLength = 280) {
@@ -366,7 +429,7 @@ export class TwitterInteractPeopleClient extends ClientBase {
         return result.trim();
     }
 
-    private async generateNewTweet(mostBoughtTokenData : Transaction, relatedTweets : Tweet[]) {
+    private async generateNewTweet(mostBoughtTokenData : string, usefulArticles : string[]) {
         console.log("Generating new tweet");
         try {
             await this.runtime.ensureUserExists(
@@ -410,8 +473,8 @@ export class TwitterInteractPeopleClient extends ClientBase {
                 {
                     twitterUserName: this.runtime.getSetting("TWITTER_USERNAME"),
                     timeline: formattedHomeTimeline,
-                    mostPurchasedTokenData: `Most Purchased Token Details:\nToken: ${mostBoughtTokenData.boughtToken}\nAmount: $${(mostBoughtTokenData.amount/1000).toFixed(2)}K\nMarket Cap: $${(mostBoughtTokenData.marketCap/1000000).toFixed(2)}M`,
-                    relatedTweets: `Related Discussions:\n${relatedTweets.map(tweet => `@${tweet.username}: ${tweet.text}`).join('\n')}`
+                    mostPurchasedTokenData: `Most Purchased Token Details:\nToken: ${mostBoughtTokenData}`,
+                    relatedTweets: `Related Discussions:\n${usefulArticles.join('\n')}`
                 }
             );
 
@@ -946,3 +1009,5 @@ export class TwitterInteractPeopleClient extends ClientBase {
         }
     }
 }
+
+
