@@ -7,6 +7,7 @@ import { generateImage, generateMessageResponse, generateText } from "@ai16z/eli
 import { ClientBase } from "./base.ts";
 import { messageCompletionFooter } from "@ai16z/eliza/src/parsing.ts";
 import { characterJsonManager } from "@ai16z/eliza/src/characterJsonManager.ts";
+import {Browser} from 'puppeteer';
 import puppeteer from 'puppeteer';
 import path from 'path';
 import {
@@ -133,6 +134,7 @@ export class TwitterInteractPeopleClient extends ClientBase {
     }
 
     private async takeScreenshot(
+        browser: Browser,
         url: string,
         outputPath: string,
         options: {
@@ -144,8 +146,6 @@ export class TwitterInteractPeopleClient extends ClientBase {
             timeout?: number;
         } = {}
     ) {
-        const browser = await puppeteer.connect({ browserWSEndpoint: await this.wsEndPoint() });
-
         try {
             const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
             const pathInfo = path.parse(outputPath);
@@ -186,20 +186,101 @@ export class TwitterInteractPeopleClient extends ClientBase {
             console.error('Error taking screenshot:', error);
             throw error;
         } finally {
-            await browser.close();
         }
+    }
+
+    private async generateKaitoUrl(tokenName: string): Promise<string> {
+        // Base filter structure
+        const filters = [
+            {
+                "field": "created_at",
+                "type": "all",
+                "values": ["last_24hrs"]
+            },
+            {
+                "field": "index",
+                "type": "all",
+                "values": [["Twitter", "Warpcast", "Governance", "Vote", "News", "Twitter_Space", "Podcast", "Conference", "Medium", "Research", "Mirror", "Discord", "Telegram"]]
+            },
+            {
+                "field": "language",
+                "values": [["en", "zh", "ko", "others"]],
+                "type": "all"
+            },
+            {
+                "field": "crypto_ticker",
+                "values": [[`${tokenName}__${tokenName}__${tokenName}__https://kaito-public-assets.s3.us-west-2.amazonaws.com/ticker-icons/${tokenName}/997651cfb21eff430609ba4287ffdb35`]],
+                "type": "all"
+            }
+        ];
+
+        // Create URL parameters
+        const params = new URLSearchParams({
+            'q': `$${tokenName}`,
+            'size': 'n_20_n',
+            'filters': JSON.stringify(filters),
+            'custom.type': 'News',
+            'custom.name': 'NullTX',
+            'custom.searchTerm': `$${tokenName}`,
+            'custom.tickers': tokenName,
+            'custom.trigger': 'Results'
+        });
+
+        // Create the final URL
+        const baseUrl = 'https://portal.kaito.ai/search';
+        const url = `${baseUrl}?${params.toString()}`;
+
+        return url;
+    }
+
+    private async getTopToken(text: string): Promise<string> {
+        // Find the "Top Gainer" section
+        const topGainerIndex = text.indexOf('Top Gainer');
+        if (topGainerIndex === -1) return '';
+
+        // Get the text starting from "Top Gainer"
+        const relevantText = text.slice(topGainerIndex);
+
+        // Split into lines and find the line after headers
+        const lines = relevantText.split('\n');
+
+        // Find the header line (contains "Name Current")
+        const headerIndex = lines.findIndex(line => line.includes('Name Current'));
+        if (headerIndex === -1) return '';
+
+        // Get the first data line (it's right after the header)
+        const topLine = lines[headerIndex + 1];
+        if (!topLine) return '';
+
+        // Extract the token name (first word)
+        const topToken = topLine.split(' ')[0];
+
+        return topToken;
     }
 
     private async checkForNewTweets() {
 
+        const browser = await puppeteer.connect({ browserWSEndpoint: await this.wsEndPoint() });
+
         let pathToScreenshot = await this.takeScreenshot(
+            browser,
             'https://portal.kaito.ai/insight',
             'C:\\Users\\Vsevolod\\Desktop\\basic-screenshot.jpeg'
         );
 
         const description = await describeImage(pathToScreenshot, "Scrape all the text from the image");
 
+        const topToken = await this.getTopToken(description);
+
         console.log("description: ", description);
+
+        const kaitoUrl = await this.generateKaitoUrl(topToken)
+
+        pathToScreenshot = await this.takeScreenshot(
+            browser,
+            kaitoUrl,
+            'C:\\Users\\Vsevolod\\Desktop\\kaito-screenshot.jpeg'
+        );
 
         return
 
